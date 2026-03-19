@@ -1,0 +1,43 @@
+# Warrington 1975 Table I: CSL disorientations for hexagonal lattice
+# c/a = sqrt(8/3) (ideal HCP)
+#
+# D.H. Warrington, "The Coincidence Site Lattice (CSL) and Grain Boundary
+# (DSC) Dislocations for the Hexagonal Lattice",
+# J. Physique Colloque C4, 36 (1975) C4-87--C4-95.
+#
+# Axis notation: 3-axis hexagonal [U V W]
+# Sigma, Axis_U, Axis_V, Axis_W, Angle_deg
+#
+# --- First part (directly OCR'd from scan) ---
+7,   0, 0, 1,  21.79
+10,  2, 1, 0,  78.46
+11,  2, 1, 0,  62.96
+13,  0, 0, 1,  27.80
+14,  2, 1, 0,  44.42
+17,  1, 0, 0,  86.63
+18,  1, 0, 0,  70.53
+19,  0, 0, 1,  13.17
+22,  1, 0, 0,  50.48
+25,  2, 1, 0,  23.07
+# --- Continuation (manually entered) ---
+26,  8, 0, 1,  87.796
+27,  1, 0, 0,  38.942
+29,  16, 0, 3, 66.637
+31,  0, 0, 1,  17.897
+31,  5, 1, 0,  56.744
+34,  4, 0, 1,  53.968
+35,  2, 1, 0,  34.048
+35,  2, 1, 0,  57.122
+37,  0, 0, 1,  9.410
+38,  1, 0, 0,  26.525
+38,  16, 8, 3, 73.174
+41,  1, 0, 0,  55.877
+43,  0, 0, 1,  15.178
+43,  8, 1, 0,  83.323
+45,  3, 1, 0,  86.177
+46,  8, 0, 3,  40.459
+47,  32, 16, 9, 55.679
+49,  0, 0, 1,  16.426
+49,  2, 1, 0,  88.831
+50,  8, 0, 1,  60.000
+50,  3, 1, 0,  63.896
