@@ -1,10 +1,10 @@
-"""CLI entry point: python -m hcp_csl_enumerator [c/a] [sigma_max]"""
+"""CLI entry point: python -m hcp_gb_generator [c/a] [sigma_max]"""
 
 import sys
 import time
 from math import sqrt
 
-from hcp_csl_enumerator._core import (
+from hcp_gb_generator._core import (
     enumerate_0001_csl,
     enumerate_tilt_csl,
     print_csl_table,

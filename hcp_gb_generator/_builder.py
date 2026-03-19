@@ -27,7 +27,7 @@ import numpy as np
 from ase import Atoms
 from ase.build import bulk, make_supercell
 
-from hcp_csl_enumerator._core import (
+from hcp_gb_generator._core import (
     crystal_basis_matrix,
     rotation_axis_angle,
     three_axis_to_miller_bravais,
@@ -450,8 +450,8 @@ def build_gb(
 
     Examples
     --------
-    >>> from hcp_csl_enumerator import find_csl
-    >>> from hcp_csl_enumerator.builder import build_gb
+    >>> from hcp_gb_generator import find_csl
+    >>> from hcp_gb_generator.builder import build_gb
     >>> recs = find_csl(ca_ratio=1.587, sigma=7,
     ...                 axis_miller_bravais=[0,0,0,1], sigma_max=10)
     >>> atoms = build_gb(recs[0], element="Ti", a=2.95, c=4.68,

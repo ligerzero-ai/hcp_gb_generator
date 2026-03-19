@@ -7,7 +7,7 @@ name = "hcp-gb-generator"
 version = "0.1.0"
 description = "Enumerate CSL grain boundaries for HCP crystals and construct ASE bicrystal structures"
 readme = "README.md"
-license = {text = "BSD-3-Clause"}
+license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
@@ -26,10 +26,10 @@ classifiers = [
 test = ["pytest>=7.0"]
 
 [project.scripts]
-hcp-csl = "hcp_csl_enumerator.__main__:main"
+hcp-gb = "hcp_gb_generator.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["hcp_csl_enumerator*"]
+include = ["hcp_gb_generator*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

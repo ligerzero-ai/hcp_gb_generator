@@ -18,7 +18,7 @@ the c/a ratio enters through the c-axis column of M.
 
 Usage
 -----
->>> from hcp_csl_enumerator import enumerate_hcp_csl, find_csl
+>>> from hcp_gb_generator import enumerate_hcp_csl, find_csl
 >>> results = enumerate_hcp_csl(ca_ratio=1.587, sigma_max=50)
 >>> matches = find_csl(sigma=7, ca_ratio=1.587)
 >>> print_csl_table(results)

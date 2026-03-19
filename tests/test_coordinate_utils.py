@@ -4,14 +4,14 @@ import numpy as np
 import pytest
 from math import sqrt
 
-from hcp_csl_enumerator import (
+from hcp_gb_generator import (
     crystal_basis_matrix,
     mb_str,
     miller_bravais_to_3axis,
     rotation_axis_angle,
     three_axis_to_miller_bravais,
 )
-from hcp_csl_enumerator._core import (
+from hcp_gb_generator._core import (
     _gcd_many,
     _hex_symmetry_equivalent_dirs,
     _loeschian_pairs,

@@ -17,7 +17,7 @@ import pytest
 import numpy as np
 from math import sqrt
 
-from hcp_csl_enumerator import (
+from hcp_gb_generator import (
     enumerate_0001_csl,
     enumerate_hcp_csl,
     enumerate_tilt_csl,
@@ -409,7 +409,7 @@ class TestDataFrame:
 @pytest.fixture(scope="module")
 def extended_csl_results():
     """Extended tilt search with max_idx=9 (covers axes up to index 9)."""
-    from hcp_csl_enumerator import enumerate_0001_csl, enumerate_tilt_csl
+    from hcp_gb_generator import enumerate_0001_csl, enumerate_tilt_csl
     res = enumerate_0001_csl(sigma_max=50, ca=IDEAL_CA)
     res += enumerate_tilt_csl(IDEAL_CA, sigma_max=50, max_idx=9)
     return res
