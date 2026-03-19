@@ -221,6 +221,75 @@ def cart_axis_to_miller(ax_cart: np.ndarray, ca: float,
 
 
 # ---------------------------------------------------------------------------
+# Hexagonal disorientation
+# ---------------------------------------------------------------------------
+
+# The 12 proper rotations of point group 622 in 3-axis hex crystal coords.
+# Each is a 3×3 integer matrix operating on [U, V, W].
+_HEX_SYMMETRY_OPS_3AX = [
+    [[ 1, 0, 0], [ 0, 1, 0], [ 0, 0, 1]],   # identity
+    [[ 0,-1, 0], [ 1,-1, 0], [ 0, 0, 1]],   # 60°
+    [[-1, 1, 0], [-1, 0, 0], [ 0, 0, 1]],   # 120°
+    [[-1, 0, 0], [ 0,-1, 0], [ 0, 0, 1]],   # 180°
+    [[ 0, 1, 0], [-1, 1, 0], [ 0, 0, 1]],   # 240°
+    [[ 1,-1, 0], [ 1, 0, 0], [ 0, 0, 1]],   # 300°
+    # 2-fold axes in basal plane (622 group)
+    [[ 0,-1, 0], [-1, 0, 0], [ 0, 0,-1]],
+    [[ 1,-1, 0], [ 0,-1, 0], [ 0, 0,-1]],
+    [[-1, 0, 0], [-1, 1, 0], [ 0, 0,-1]],
+    [[ 0, 1, 0], [ 1, 0, 0], [ 0, 0,-1]],
+    [[-1, 1, 0], [ 0, 1, 0], [ 0, 0,-1]],
+    [[ 1, 0, 0], [ 1,-1, 0], [ 0, 0,-1]],
+]
+
+
+def hex_disorientation(R_cart: np.ndarray, ca: float
+                       ) -> tuple[np.ndarray, float, np.ndarray]:
+    """
+    Compute the hexagonal disorientation of a rotation matrix.
+
+    The disorientation is the symmetry-equivalent rotation with the
+    minimum rotation angle, with the axis in the standard stereographic
+    triangle [100]-[210]-[001].
+
+    Parameters
+    ----------
+    R_cart : (3, 3) Cartesian rotation matrix (full misorientation).
+    ca : float  c/a ratio.
+
+    Returns
+    -------
+    axis_cart : (3,) unit vector — disorientation axis
+    angle_deg : float — disorientation angle (minimum over all equivalents)
+    R_disor : (3, 3) — the disorientation rotation matrix in Cartesian
+    """
+    S = crystal_basis_matrix(ca)
+    S_inv = np.linalg.inv(S)
+
+    # Convert symmetry ops to Cartesian once
+    sym_cart = []
+    for op in _HEX_SYMMETRY_OPS_3AX:
+        op_arr = np.array(op, dtype=float)
+        sym_cart.append(S @ op_arr @ S_inv)
+
+    best_angle = 360.0
+    best_axis = np.array([0.0, 0.0, 1.0])
+    best_R = R_cart.copy()
+
+    # Try all Ui @ R @ Uj^-1 combinations (12 × 12 = 144)
+    for Ui in sym_cart:
+        for Uj in sym_cart:
+            R_eq = Ui @ R_cart @ Uj.T   # Uj^-1 = Uj^T for orthogonal ops
+            ax, ang = rotation_axis_angle(R_eq)
+            if ang < best_angle:
+                best_angle = ang
+                best_axis = ax
+                best_R = R_eq
+
+    return best_axis, best_angle, best_R
+
+
+# ---------------------------------------------------------------------------
 # Core CSL construction
 # ---------------------------------------------------------------------------
 
@@ -239,13 +308,18 @@ def integer_matrix_to_csl(M: np.ndarray, sigma: int, ca: float,
     if abs(np.linalg.det(R_cart) - 1.0) > tol:
         return None
 
-    axis, angle = rotation_axis_angle(R_cart)
-    miller_ax = cart_axis_to_miller(axis, ca)
+    # Raw rotation
+    axis_raw, angle_raw = rotation_axis_angle(R_cart)
+
+    # Disorientation (minimum angle over hex symmetry equivalents)
+    axis_disor, angle_disor, _ = hex_disorientation(R_cart, ca)
+    miller_ax = cart_axis_to_miller(axis_disor, ca)
 
     return {
         "sigma": sigma,
-        "angle_deg": round(angle, 4),
-        "axis_cart": axis,
+        "disorientation_angle": round(angle_disor, 4),
+        "angle_raw": round(angle_raw, 4),
+        "axis_cart": axis_disor,
         "axis_miller": miller_ax,
         "axis_miller_bravais": three_axis_to_miller_bravais(miller_ax),
         "R_cart": R_cart,
@@ -298,27 +372,20 @@ def enumerate_0001_csl(sigma_max: int = 50, ca: float = 1.587) -> list[dict]:
             cos_t = (2 * u - v) / (2.0 * sigma)
             if abs(cos_t) > 1.0:
                 continue
-            angle = degrees(acos(min(1.0, max(-1.0, cos_t))))
-
-            # Disorientation in [0, 30] deg (hex 6-fold symmetry)
-            ang_disor = angle % 60.0
-            if ang_disor > 30.0:
-                ang_disor = 60.0 - ang_disor
-
-            key = (sigma, round(ang_disor, 3))
-            if key in seen:
-                continue
-            seen.add(key)
 
             rec = integer_matrix_to_csl(M, sigma, ca)
             if rec is None:
                 continue
 
-            rec["angle_disorientation"] = round(ang_disor, 4)
+            key = (sigma, round(rec["disorientation_angle"], 3))
+            if key in seen:
+                continue
+            seen.add(key)
+
             rec["axis_type"] = "[0001]"
             results.append(rec)
 
-    results.sort(key=lambda r: (r["sigma"], r["angle_disorientation"]))
+    results.sort(key=lambda r: (r["sigma"], r["disorientation_angle"]))
     return results
 
 
@@ -426,7 +493,7 @@ def enumerate_tilt_csl(ca: float, sigma_max: int = 30,
                 if rec is None:
                     continue
 
-                angle = rec["angle_deg"]
+                angle = rec["disorientation_angle"]
                 axis_key = tuple(sorted(abs(x) for x in rec["axis_miller"]))
                 key = (int(sigma), round(angle, 1), axis_key)
                 if key in seen:
@@ -436,7 +503,7 @@ def enumerate_tilt_csl(ca: float, sigma_max: int = 30,
                 rec["axis_type"] = "tilt"
                 results.append(rec)
 
-    results.sort(key=lambda r: (r["sigma"], r["angle_deg"]))
+    results.sort(key=lambda r: (r["sigma"], r["disorientation_angle"]))
     return results
 
 
@@ -469,15 +536,15 @@ def enumerate_hcp_csl(
 
     Returns
     -------
-    list of dict with keys: sigma, angle_deg, axis_miller,
-    axis_miller_bravais, axis_cart, R_cart, M_crystal
+    list of dict with keys: sigma, disorientation_angle, angle_raw,
+    axis_miller, axis_miller_bravais, axis_cart, R_cart, M_crystal
     """
     all_results = []
     if include_0001:
         all_results.extend(enumerate_0001_csl(sigma_max, ca_ratio))
     if include_tilt:
         all_results.extend(enumerate_tilt_csl(ca_ratio, sigma_max, max_idx))
-    all_results.sort(key=lambda r: (r["sigma"], r["angle_deg"]))
+    all_results.sort(key=lambda r: (r["sigma"], r["disorientation_angle"]))
     return all_results
 
 
@@ -533,7 +600,8 @@ def find_csl(
                if any(abs(float(np.dot(r["axis_cart"], qe))) > 0.99
                       for qe in q_equivs)]
 
-    out = [r for r in out if angle_min <= r["angle_deg"] <= angle_max]
+    out = [r for r in out
+           if angle_min <= r["disorientation_angle"] <= angle_max]
     return out
 
 
@@ -558,7 +626,7 @@ def print_csl_table(results: list[dict], max_rows: int = 80) -> None:
         print("No CSL grain boundaries found.")
         return
 
-    header = f"{'Sigma':>6}  {'Angle':>10}  {'Axis [uvtw]':>16}  {'Axis [UVW]':>12}"
+    header = f"{'Sigma':>6}  {'Disorientation':>14}  {'Axis [uvtw]':>16}  {'Axis [UVW]':>12}"
     print(header)
     print("-" * len(header))
 
@@ -566,7 +634,7 @@ def print_csl_table(results: list[dict], max_rows: int = 80) -> None:
         uvtw = r.get("axis_miller_bravais", r["axis_miller"])
         uvtw_s = mb_str(uvtw)
         uvw_s = "[" + " ".join(f"{x:>2}" for x in r["axis_miller"]) + "]"
-        print(f"{r['sigma']:>6}  {r['angle_deg']:>10.2f}  {uvtw_s:>16}  {uvw_s:>12}")
+        print(f"{r['sigma']:>6}  {r['disorientation_angle']:>14.2f}  {uvtw_s:>16}  {uvw_s:>12}")
 
     if len(results) > max_rows:
         print(f"  ... ({len(results) - max_rows} more rows)")
@@ -579,7 +647,8 @@ def to_dataframe(results: list[dict]) -> pd.DataFrame:
         uvtw = r.get("axis_miller_bravais", r["axis_miller"])
         rows.append({
             "sigma": r["sigma"],
-            "angle_deg": r["angle_deg"],
+            "disorientation_angle": r["disorientation_angle"],
+            "angle_raw": r.get("angle_raw", r["disorientation_angle"]),
             "axis_uvtw": mb_str(uvtw),
             "axis_UVW": "[" + " ".join(str(x) for x in r["axis_miller"]) + "]",
             "axis_type": r.get("axis_type", ""),

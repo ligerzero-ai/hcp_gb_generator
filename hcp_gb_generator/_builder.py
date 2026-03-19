@@ -200,7 +200,7 @@ def build_twist_gb(
     bicrystal.pbc = [True, True, vacuum == 0.0]
 
     bicrystal.info["sigma"] = sigma
-    bicrystal.info["angle_deg"] = csl_record["angle_deg"]
+    bicrystal.info["disorientation_angle"] = csl_record["disorientation_angle"]
     bicrystal.info["axis_miller"] = csl_record["axis_miller"]
     bicrystal.info["gap"] = gap
     bicrystal.info["n_layers"] = n_layers
@@ -246,7 +246,8 @@ def csl_slab_directions(
     S = crystal_basis_matrix(ca)
     R_cart = np.asarray(csl_record["R_cart"])
     axis_cart = np.asarray(csl_record["axis_cart"])
-    angle = csl_record["angle_deg"]
+    # Use raw rotation angle for geometric construction, not disorientation
+    angle = csl_record.get("angle_raw", csl_record["disorientation_angle"])
 
     # Tilt axis = z-direction of the slab (periodic along GB)
     z_dir_3ax = _nearest_int_direction(axis_cart, S)
@@ -395,7 +396,7 @@ def build_tilt_gb(
     bicrystal.pbc = [True, True, vacuum == 0.0]
 
     bicrystal.info["sigma"] = csl_record["sigma"]
-    bicrystal.info["angle_deg"] = csl_record["angle_deg"]
+    bicrystal.info["disorientation_angle"] = csl_record["disorientation_angle"]
     bicrystal.info["axis_miller"] = csl_record["axis_miller"]
     bicrystal.info["upper_dirs"] = upper_dirs
     bicrystal.info["lower_dirs"] = lower_dirs

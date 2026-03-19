@@ -70,44 +70,18 @@ A_DIR_1120_CSL = [
     (41, 55.877, [2, -1, -1, 0]),
 ]
 
-# --- Numerically generated low-index axis entries ---
-# Found by enumerate_tilt_csl with max_idx=3 and verified against
-# the paper's total CSL counts.
-COMPUTED_LOW_INDEX_CSL = [
-    (10,  180.00, None),    # [11-21] type axis
-    (11,   84.78, None),    # [11-21] type axis
-    (11,  129.52, None),    # [22-03] type axis
-    (11,  180.00, None),    # [11-21] type axis
-    (14,  180.00, None),    # [11-23] type axis
-    (17,  107.10, None),    # [22-01] type axis
-    (17,  139.88, None),    # [11-21] type axis
-    (25,   63.90, None),    # [11-23] type axis
-    (27,   70.53, None),    # [22-03] type axis
-    (27,  123.75, None),    # [11-23] type axis
-    (35,   68.20, None),    # [11-21] type axis
-    (45,   86.177, None),   # paper: axis [310]
-    (50,   63.896, None),   # paper: axis [310]
-]
-
-# Supplementary angle partners (theta + theta' = 180 for tilt boundaries)
-SUPPLEMENTARY_CSL = [
-    (10, 101.54, [1, 0, -1, 0]),
-    (11, 117.04, [1, 0, -1, 0]),
-    (14, 135.58, [1, 0, -1, 0]),
-    (17,  93.37, [2, -1, -1, 0]),
-    (18, 109.47, [2, -1, -1, 0]),
-    (22, 129.52, [2, -1, -1, 0]),
-    (25, 156.93, [1, 0, -1, 0]),
-    (27, 141.06, [2, -1, -1, 0]),
-    (38, 153.47, [2, -1, -1, 0]),
-    (41, 124.12, [2, -1, -1, 0]),
-]
-
-# 180-degree twin boundaries (axis matching relaxed)
-TWIN_180_CSL = [
-    (7,  180.00, None),
-    (17, 180.00, None),
-    (18, 180.00, None),
+# --- Numerically generated entries with mixed/higher-index axes ---
+# Disorientation angles (reduced by hex symmetry).
+# Axis matching uses sigma+angle only (axis=None) because the stored
+# axis representative may differ from the canonical form.
+COMPUTED_MIXED_CSL = [
+    (26,  87.80, None),    # [8 0 1] type axis
+    (34,  53.97, None),    # [4 0 1] type axis
+    (45,  86.18, None),    # [3 1 0] type axis
+    (46,  40.46, None),    # [8 0 3] type axis
+    (46,  79.98, None),    # [8 4 -1] type axis
+    (50,  60.00, None),    # [8 0 1] type axis
+    (50,  63.90, None),    # [3 1 0] type axis
 ]
 
 # --- High-index axis entries from Warrington Table I continuation ---
@@ -152,14 +126,12 @@ WARRINGTON_TABLE_I_PUBLISHED = [
     (49, 88.831, [1, 0, -1, 0]),
 ]
 
-# Every testable entry (low-index axes found with default max_idx=3)
+# Every testable entry (disorientation angles, deduplicated)
 ALL_ENTRIES = (
     BASAL_0001_CSL
     + PRISM_1010_CSL
     + A_DIR_1120_CSL
-    + COMPUTED_LOW_INDEX_CSL
-    + SUPPLEMENTARY_CSL
-    + TWIN_180_CSL
+    + COMPUTED_MIXED_CSL
 )
 
 
@@ -207,8 +179,8 @@ class TestWarringtonPublished:
             all_csl_results, sigma=sigma,
             axis_miller_bravais=axis_mb, ca_ratio=IDEAL_CA,
         )
-        angles = [m["angle_deg"] for m in matches]
-        disor = [m.get("angle_disorientation", m["angle_deg"])
+        angles = [m["disorientation_angle"] for m in matches]
+        disor = [m["disorientation_angle"]
                  for m in matches]
         all_angles = angles + disor
         assert any(abs(a - angle) < 0.5 for a in all_angles), (
@@ -237,8 +209,8 @@ def test_all_entries_exist(all_csl_results, sigma, angle, axis_mb):
         # Higher-index axes: match by sigma only
         matches = find_csl(all_csl_results, sigma=sigma)
 
-    angles = [m["angle_deg"] for m in matches]
-    disor = [m.get("angle_disorientation", m["angle_deg"]) for m in matches]
+    angles = [m["disorientation_angle"] for m in matches]
+    disor = [m["disorientation_angle"] for m in matches]
     all_angles = angles + disor
     assert any(abs(a - angle) < 0.6 for a in all_angles), (
         f"Sigma {sigma} axis {axis_mb}: expected ~{angle} deg, "
@@ -258,7 +230,7 @@ class TestBasalCSL:
     def test_basal_angle(self, csl_0001, sigma, angle, _):
         matches = [r for r in csl_0001 if r["sigma"] == sigma]
         assert len(matches) >= 1
-        disor = matches[0].get("angle_disorientation", matches[0]["angle_deg"])
+        disor = matches[0]["disorientation_angle"]
         assert abs(disor - angle) < 0.05, (
             f"Sigma {sigma}: expected {angle}, got {disor}"
         )
@@ -295,39 +267,29 @@ class TestBasalCSL:
 # Supplementary angle pairs
 # ===================================================================
 
-@pytest.mark.parametrize(
-    "sigma, angle_lo, angle_hi, axis_mb",
-    [
-        (10,  78.46, 101.54, [1, 0, -1, 0]),
-        (11,  62.96, 117.04, [1, 0, -1, 0]),
-        (14,  44.42, 135.58, [1, 0, -1, 0]),
-        (17,  86.63,  93.37, [2, -1, -1, 0]),
-        (18,  70.53, 109.47, [2, -1, -1, 0]),
-        (22,  50.48, 129.52, [2, -1, -1, 0]),
-    ],
-    ids=[f"S{s}" for s, *_ in [
-        (10,), (11,), (14,), (17,), (18,), (22,)]],
-)
-def test_supplementary_pair(all_csl_results, sigma, angle_lo, angle_hi,
-                            axis_mb):
-    """Tilt CSLs come in supplementary pairs: theta + theta' ~ 180."""
-    matches = find_csl(
-        all_csl_results, sigma=sigma,
-        axis_miller_bravais=axis_mb, ca_ratio=IDEAL_CA,
-    )
-    angles = sorted(m["angle_deg"] for m in matches)
-    assert any(abs(a - angle_lo) < 0.5 for a in angles), (
-        f"Sigma {sigma}: missing low angle ~{angle_lo}"
-    )
-    assert any(abs(a - angle_hi) < 0.5 for a in angles), (
-        f"Sigma {sigma}: missing high angle ~{angle_hi}"
-    )
-    # Check supplementary relationship
-    lo = min(a for a in angles if abs(a - angle_lo) < 0.5)
-    hi = min(a for a in angles if abs(a - angle_hi) < 0.5)
-    assert abs((lo + hi) - 180.0) < 1.0, (
-        f"Sigma {sigma}: {lo} + {hi} = {lo + hi}, expected ~180"
-    )
+class TestDisorientationProperties:
+    """Verify properties of the disorientation reduction."""
+
+    def test_disorientation_leq_90(self, all_csl_results):
+        """Hex disorientation angle is always <= 93.37 deg (max for 622)."""
+        for r in all_csl_results:
+            assert r["disorientation_angle"] <= 93.5, (
+                f"Sigma {r['sigma']}: disorientation {r['disorientation_angle']} > 93.5"
+            )
+
+    def test_0001_disorientation_leq_30(self, csl_0001):
+        """[0001]-axis disorientation is always <= 30 deg (6-fold symmetry)."""
+        for r in csl_0001:
+            assert r["disorientation_angle"] <= 30.1, (
+                f"Sigma {r['sigma']}: disorientation {r['disorientation_angle']} > 30"
+            )
+
+    def test_raw_angle_preserved(self, all_csl_results):
+        """Every record has both disorientation_angle and angle_raw."""
+        for r in all_csl_results:
+            assert "disorientation_angle" in r
+            assert "angle_raw" in r
+            assert r["disorientation_angle"] <= r["angle_raw"] + 0.01
 
 
 # ===================================================================
@@ -363,15 +325,17 @@ class TestFindCSL:
     def test_filter_by_angle_range(self, all_csl_results):
         matches = find_csl(all_csl_results, angle_min=40, angle_max=50)
         for r in matches:
-            assert 40.0 <= r["angle_deg"] <= 50.0
+            assert 40.0 <= r["disorientation_angle"] <= 50.0
 
     def test_filter_combined(self, all_csl_results):
         matches = find_csl(
             all_csl_results, sigma=7,
             axis_miller_bravais=[0, 0, 0, 1], ca_ratio=IDEAL_CA,
         )
-        assert len(matches) == 1
-        assert matches[0]["sigma"] == 7
+        assert len(matches) >= 1
+        assert all(m["sigma"] == 7 for m in matches)
+        assert all(abs(m["disorientation_angle"] - 21.79) < 0.5
+                   for m in matches)
 
     def test_generate_from_ca_ratio(self):
         """find_csl auto-generates results when given ca_ratio."""
@@ -390,7 +354,7 @@ class TestDataFrame:
     def test_columns(self, all_csl_results):
         df = to_dataframe(all_csl_results)
         assert "sigma" in df.columns
-        assert "angle_deg" in df.columns
+        assert "disorientation_angle" in df.columns
         assert "axis_uvtw" in df.columns
         assert len(df) == len(all_csl_results)
 
@@ -424,8 +388,8 @@ def extended_csl_results():
 def test_high_index_entry(extended_csl_results, sigma, angle, axis_3ax):
     """Warrington Table I entries with high-index rotation axes."""
     matches = [r for r in extended_csl_results if r["sigma"] == sigma]
-    angles = [m["angle_deg"] for m in matches]
-    disor = [m.get("angle_disorientation", m["angle_deg"]) for m in matches]
+    angles = [m["disorientation_angle"] for m in matches]
+    disor = [m["disorientation_angle"] for m in matches]
     all_angles = angles + disor
     assert any(abs(a - angle) < 0.6 for a in all_angles), (
         f"Sigma {sigma} axis {axis_3ax}: expected ~{angle} deg, "
