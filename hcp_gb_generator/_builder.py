@@ -84,6 +84,202 @@ def _to_4index(uvw: list[int]) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
+# Orthogonal / near-orthogonal supercell search
+# ---------------------------------------------------------------------------
+
+def find_orthogonal_cell(
+    atoms: Atoms,
+    max_search: int = 10,
+    angle_tol: float = 1.0,
+    preserve_z: bool = True,
+) -> Atoms:
+    """
+    Find the smallest supercell of ``atoms`` that is orthogonal
+    (or within ``angle_tol`` of 90 degrees on all angles).
+
+    For grain boundary slabs, the z-direction (stacking / GB normal) is
+    typically already correct and should not be mixed with in-plane
+    vectors.  Set ``preserve_z=True`` (default) to only orthogonalize
+    the in-plane (xy) part.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        Input structure (typically a bicrystal from ``build_gb``).
+    max_search : int
+        Maximum integer coefficient to try in each direction.
+        Larger values find smaller orthogonal cells but take longer.
+    angle_tol : float
+        Tolerance in degrees.  Angles within ``90 ± angle_tol`` are
+        accepted as orthogonal.
+    preserve_z : bool
+        If True, keep the z cell vector unchanged and only search for
+        orthogonal combinations of the x and y vectors.
+
+    Returns
+    -------
+    ase.Atoms
+        Supercell with (near-)orthogonal cell vectors.
+
+    Raises
+    ------
+    ValueError
+        If no orthogonal cell is found within the search range.
+
+    Examples
+    --------
+    >>> gb = build_gb(rec, "Ti", a=2.95, c=4.68, n_layers=4)
+    >>> orth_gb = find_orthogonal_cell(gb)
+    >>> print(orth_gb.cell.angles())  # ~[90, 90, 90]
+    """
+    cell = np.array(atoms.cell)
+
+    if preserve_z:
+        return _orthogonalize_xy(atoms, max_search, angle_tol)
+    else:
+        return _orthogonalize_3d(atoms, max_search, angle_tol)
+
+
+def _orthogonalize_xy(atoms: Atoms, max_search: int,
+                      angle_tol: float) -> Atoms:
+    """Orthogonalize only the in-plane (xy) cell vectors, keep z fixed."""
+    cell = np.array(atoms.cell)
+    a1 = cell[0]
+    a2 = cell[1]
+    a3 = cell[2]  # z — preserved
+
+    best_P = None
+    best_vol = np.inf
+
+    rng = range(-max_search, max_search + 1)
+
+    for m1 in rng:
+        for n1 in rng:
+            if m1 == 0 and n1 == 0:
+                continue
+            v1 = m1 * a1 + n1 * a2
+            len1 = np.linalg.norm(v1)
+            if len1 < 1e-6:
+                continue
+
+            for m2 in rng:
+                for n2 in rng:
+                    if m2 == 0 and n2 == 0:
+                        continue
+                    # Ensure linearly independent: det of 2D part != 0
+                    det2d = m1 * n2 - m2 * n1
+                    if det2d == 0:
+                        continue
+
+                    v2 = m2 * a1 + n2 * a2
+                    len2 = np.linalg.norm(v2)
+                    if len2 < 1e-6:
+                        continue
+
+                    # Check xy orthogonality: v1 · v2 ≈ 0
+                    cos_gamma = np.dot(v1, v2) / (len1 * len2)
+                    if abs(cos_gamma) > np.sin(np.radians(angle_tol)):
+                        continue
+
+                    # Check v1 ⊥ z and v2 ⊥ z
+                    len3 = np.linalg.norm(a3)
+                    cos_alpha = np.dot(v2, a3) / (len2 * len3)
+                    cos_beta = np.dot(v1, a3) / (len1 * len3)
+                    if (abs(cos_alpha) > np.sin(np.radians(angle_tol))
+                            or abs(cos_beta) > np.sin(np.radians(angle_tol))):
+                        continue
+
+                    vol = abs(det2d) * abs(np.dot(a3, np.cross(a1, a2)))
+                    if vol < best_vol:
+                        best_vol = vol
+                        best_P = np.array([
+                            [m1, n1, 0],
+                            [m2, n2, 0],
+                            [0,  0,  1],
+                        ])
+
+    if best_P is None:
+        raise ValueError(
+            f"No orthogonal cell found with max_search={max_search}, "
+            f"angle_tol={angle_tol}. Try increasing max_search."
+        )
+
+    return make_supercell(atoms, best_P)
+
+
+def _orthogonalize_3d(atoms: Atoms, max_search: int,
+                      angle_tol: float) -> Atoms:
+    """Full 3D orthogonal supercell search."""
+    cell = np.array(atoms.cell)
+
+    best_P = None
+    best_vol = np.inf
+
+    rng = range(-max_search, max_search + 1)
+    base_vol = abs(np.linalg.det(cell))
+
+    # Enumerate candidate vectors as integer combos of cell rows
+    candidates = []
+    for i in rng:
+        for j in rng:
+            for k in rng:
+                if i == 0 and j == 0 and k == 0:
+                    continue
+                v = i * cell[0] + j * cell[1] + k * cell[2]
+                length = np.linalg.norm(v)
+                if length < 1e-6:
+                    continue
+                candidates.append((i, j, k, v, length))
+
+    # Sort by length for efficiency — try shorter vectors first
+    candidates.sort(key=lambda x: x[4])
+
+    # Prune to manageable size
+    candidates = candidates[:500]
+
+    for idx1, (i1, j1, k1, v1, l1) in enumerate(candidates):
+        for idx2, (i2, j2, k2, v2, l2) in enumerate(candidates):
+            if idx2 <= idx1:
+                continue
+
+            # v1 ⊥ v2?
+            cos12 = abs(np.dot(v1, v2) / (l1 * l2))
+            if cos12 > np.sin(np.radians(angle_tol)):
+                continue
+
+            for idx3, (i3, j3, k3, v3, l3) in enumerate(candidates):
+                if idx3 <= idx2:
+                    continue
+
+                # v1 ⊥ v3 and v2 ⊥ v3?
+                cos13 = abs(np.dot(v1, v3) / (l1 * l3))
+                cos23 = abs(np.dot(v2, v3) / (l2 * l3))
+                if (cos13 > np.sin(np.radians(angle_tol))
+                        or cos23 > np.sin(np.radians(angle_tol))):
+                    continue
+
+                P = np.array([[i1, j1, k1],
+                              [i2, j2, k2],
+                              [i3, j3, k3]])
+                det = abs(np.linalg.det(P))
+                if det < 0.5:
+                    continue
+
+                vol = det * base_vol
+                if vol < best_vol:
+                    best_vol = vol
+                    best_P = P
+
+    if best_P is None:
+        raise ValueError(
+            f"No orthogonal cell found with max_search={max_search}, "
+            f"angle_tol={angle_tol}. Try increasing max_search."
+        )
+
+    return make_supercell(atoms, best_P)
+
+
+# ---------------------------------------------------------------------------
 # Build the CSL supercell matrix
 # ---------------------------------------------------------------------------
 
