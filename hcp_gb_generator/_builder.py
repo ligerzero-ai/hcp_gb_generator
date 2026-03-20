@@ -178,10 +178,11 @@ def orthogonalize_gb_plane(atoms: Atoms) -> Atoms:
         out.set_cell(new_cell, scale_atoms=False)
         out.positions = out.positions @ Q.T
 
-    # Now zero out any tiny z-components in cell[0] and cell[1]
+    # Zero out truly negligible z-components (numerical noise only)
     cell = np.array(out.cell)
-    cell[0, 2] = 0.0
-    cell[1, 2] = 0.0
+    for i in [0, 1]:
+        if abs(cell[i, 2]) < 0.01:  # < 0.01 Å is noise
+            cell[i, 2] = 0.0
     out.set_cell(cell, scale_atoms=False)
 
     out.info["skew_correction"] = P_total.tolist()

@@ -276,7 +276,7 @@ def build_bicrystal(
     interface_distance: float = 0.0,
     vacuum: float = 0.0,
     overlap_tol: float = 0.0,
-    symmetric: bool = True,
+    symmetric: bool = False,
 ) -> Atoms:
     """
     Build a grain boundary bicrystal from a CSL record.
@@ -309,8 +309,10 @@ def build_bicrystal(
         Remove atom pairs closer than this at the interface (Å).
         0 = no removal.
     symmetric : bool
-        True: grains at ±θ/2 (symmetric tilt).
-        False: grain 1 at identity, grain 2 at θ (asymmetric / general).
+        Currently only False is supported (grain 1 at identity,
+        grain 2 at full rotation θ).  Symmetric construction
+        (±θ/2) requires a different cell strategy and is not yet
+        implemented.
 
     Returns
     -------
@@ -323,20 +325,16 @@ def build_bicrystal(
     prim = bulk(element, "hcp", a=a, c=c)
     R_cart = np.asarray(csl_record["R_cart"])
 
-    # Grain rotations
     if symmetric:
-        axis, angle_deg = rotation_axis_angle(R_cart)
-        half_rad = np.radians(angle_deg / 2)
-        ct, st = np.cos(half_rad), np.sin(half_rad)
-        K = np.array([[0, -axis[2], axis[1]],
-                      [axis[2], 0, -axis[0]],
-                      [-axis[1], axis[0], 0]])
-        R_half = ct * np.eye(3) + st * K + (1 - ct) * np.outer(axis, axis)
-        R1 = R_half.T   # -θ/2
-        R2 = R_half      # +θ/2
-    else:
-        R1 = np.eye(3)
-        R2 = R_cart
+        raise NotImplementedError(
+            "symmetric=True is not yet supported in build_bicrystal. "
+            "The half-rotation (±θ/2) is not a CSL rotation, so the "
+            "CSL cell cannot be filled correctly. Use symmetric=False."
+        )
+
+    # Grain rotations: grain 1 at identity, grain 2 at full R
+    R1 = np.eye(3)
+    R2 = R_cart
 
     # Target cell from the minimal CSL (one layer thick)
     target_cell = _csl_slab_cell(csl_record, prim, n_layers=1)
