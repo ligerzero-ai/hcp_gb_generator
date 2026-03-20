@@ -639,18 +639,35 @@ def csl_slab_directions(
     y_3ax = _nearest_int_direction(y_cart, S)
     z_3ax = z_dir_3ax
 
-    # Upper grain: standard orientation
+    # For a symmetric tilt GB, each grain is rotated ±θ/2 from the
+    # symmetric reference.  The half-rotation R_half rotates the reference
+    # frame to grain 1 (upper); R_half^T rotates to grain 2 (lower).
+    # The GB plane normal x_cart is the bisector — same for both grains.
+
+    # Upper grain directions: R_half applied to reference [x, y, z]
+    x_upper = R_half @ x_cart_unit
+    y_upper = R_half @ y_cart
+    z_upper = z_cart  # tilt axis is invariant
+
+    # Lower grain: R_half^T (inverse half-rotation)
+    x_lower = R_half.T @ x_cart_unit
+    y_lower = R_half.T @ y_cart
+    z_lower = z_cart
+
+    x_3ax_u = _nearest_int_direction(x_upper, S)
+    y_3ax_u = _nearest_int_direction(y_upper, S)
+    x_3ax_l = _nearest_int_direction(x_lower, S)
+    y_3ax_l = _nearest_int_direction(y_lower, S)
+
     upper_dirs = [
-        _to_4index(x_3ax),
-        _to_4index(y_3ax),
+        _to_4index(x_3ax_u),
+        _to_4index(y_3ax_u),
         _to_4index(z_3ax),
     ]
 
-    # Lower grain: x-direction is mirrored (symmetric tilt)
-    neg_x = [-v for v in x_3ax]
     lower_dirs = [
-        _to_4index(neg_x),
-        _to_4index(y_3ax),
+        _to_4index(x_3ax_l),
+        _to_4index(y_3ax_l),
         _to_4index(z_3ax),
     ]
 
@@ -741,13 +758,17 @@ def build_tilt_gb(
             f"Original error: {exc}"
         ) from exc
 
-    # The mirrored lower grain can end up with a negative z cell vector
-    # (from the mirrored GB normal direction).  Fix by flipping z.
+    # Ensure both slabs have positive z cell vector.
+    # With half-rotation directions, the stacking direction should generally
+    # be positive, but if not, flip the cell and remap atoms via fractional
+    # coordinates to preserve the crystal orientation.
     for slab in (lower, upper):
         if slab.cell[2, 2] < 0:
+            frac = slab.get_scaled_positions(wrap=False)
             slab.cell[2] = -slab.cell[2]
-            slab.positions[:, 2] = -slab.positions[:, 2]
-            # Shift so all z >= 0
+            frac[:, 2] = -frac[:, 2]
+            slab.set_scaled_positions(frac)
+            # Shift so all Cartesian z >= 0
             slab.positions[:, 2] -= slab.positions[:, 2].min()
 
     lower.info["n_layers"] = n_layers
