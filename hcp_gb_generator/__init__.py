@@ -29,6 +29,7 @@ from hcp_gb_generator._builder import (
     csl_slab_directions,
     csl_supercell_matrix,
     find_orthogonal_cell,
+    orthogonalize_gb_plane,
     rescale_to_lattice,
 )
 
@@ -53,5 +54,6 @@ __all__ = [
     "csl_slab_directions",
     "csl_supercell_matrix",
     "find_orthogonal_cell",
+    "orthogonalize_gb_plane",
     "rescale_to_lattice",
 ]

@@ -84,8 +84,76 @@ def _to_4index(uvw: list[int]) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
-# Orthogonal / near-orthogonal supercell search
+# Orthogonal / near-orthogonal supercell
 # ---------------------------------------------------------------------------
+
+def orthogonalize_gb_plane(atoms: Atoms) -> Atoms:
+    """
+    Remove cell skew so the GB plane (xy) is exactly perpendicular to
+    the stacking direction (z).
+
+    For a slab geometry the stacking vector **c** may have in-plane
+    components (non-zero c_x, c_y).  This function subtracts the
+    nearest integer multiples of **a** and **b** to minimise those
+    components, producing a cell where c is (nearly) parallel to z.
+
+    This is cheap (no supercell expansion) — it only reshapes the
+    periodic box via an integer shear.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        Slab / bicrystal with z as the stacking direction.
+
+    Returns
+    -------
+    ase.Atoms
+        Copy with c vector made perpendicular to the ab plane.
+        ``atoms.info["skew_correction"]`` stores the applied P matrix.
+
+    Examples
+    --------
+    >>> gb = build_tilt_gb(rec, "Ti", a=2.95, c=4.68, n_layers=4)
+    >>> gb.cell.angles()        # e.g. [106, 90, 90]
+    >>> gb_flat = orthogonalize_gb_plane(gb)
+    >>> gb_flat.cell.angles()   # → [~90, ~90, 90]
+    """
+    cell = np.array(atoms.cell)
+    a_vec = cell[0]
+    b_vec = cell[1]
+    c_vec = cell[2]
+
+    # Solve for coefficients: c_vec = n1*a_vec + n2*b_vec + c_perp
+    # in the xy part only (we want c_perp to have no xy components)
+    # Project c onto the ab plane using the 2D inverse
+    ab_2d = np.array([a_vec[:2], b_vec[:2]])  # (2, 2)
+    c_2d = c_vec[:2]
+
+    if abs(np.linalg.det(ab_2d)) < 1e-10:
+        # a and b are parallel in xy — nothing to fix
+        return atoms.copy()
+
+    coeffs = np.linalg.solve(ab_2d.T, c_2d)  # [n1, n2]
+    n1 = round(coeffs[0])
+    n2 = round(coeffs[1])
+
+    # Integer shear matrix: c' = c - n1*a - n2*b
+    P = np.array([
+        [1, 0, 0],
+        [0, 1, 0],
+        [-n1, -n2, 1],
+    ])
+
+    out = make_supercell(atoms, P)
+
+    out.info["skew_correction"] = P.tolist()
+    # Preserve original info
+    for key in atoms.info:
+        if key not in out.info:
+            out.info[key] = atoms.info[key]
+
+    return out
+
 
 def find_orthogonal_cell(
     atoms: Atoms,
