@@ -21,6 +21,8 @@ from hcp_gb_generator._core import (
     three_axis_to_miller_bravais,
     to_dataframe,
 )
+from hcp_gb_generator._bicrystal import build_bicrystal
+
 from hcp_gb_generator._builder import (
     build_gb,
     build_gb_rescaled,
