@@ -92,13 +92,14 @@ def orthogonalize_gb_plane(atoms: Atoms) -> Atoms:
     Remove cell skew so the GB plane (xy) is exactly perpendicular to
     the stacking direction (z).
 
-    For a slab geometry the stacking vector **c** may have in-plane
-    components (non-zero c_x, c_y).  This function subtracts the
-    nearest integer multiples of **a** and **b** to minimise those
-    components, producing a cell where c is (nearly) parallel to z.
+    Performs TWO integer-shear corrections:
+      1. Remove xy-components from **c** (stacking vector)
+         by subtracting integer multiples of **a** and **b**.
+      2. Remove z-components from **a** and **b** (in-plane vectors)
+         by subtracting integer multiples of **c**.
 
     This is cheap (no supercell expansion) — it only reshapes the
-    periodic box via an integer shear.
+    periodic box via integer shears.
 
     Parameters
     ----------
@@ -108,50 +109,82 @@ def orthogonalize_gb_plane(atoms: Atoms) -> Atoms:
     Returns
     -------
     ase.Atoms
-        Copy with c vector made perpendicular to the ab plane.
-        ``atoms.info["skew_correction"]`` stores the applied P matrix.
+        Copy with GB plane perpendicular to stacking direction.
+        ``atoms.info["skew_correction"]`` stores the combined P matrix.
 
     Examples
     --------
-    >>> gb = build_tilt_gb(rec, "Ti", a=2.95, c=4.68, n_layers=4)
+    >>> gb = build_bicrystal(rec, "Ti", a=2.95, c=4.68, n_layers=4)
     >>> gb.cell.angles()        # e.g. [106, 90, 90]
     >>> gb_flat = orthogonalize_gb_plane(gb)
     >>> gb_flat.cell.angles()   # → [~90, ~90, 90]
     """
+    P_total = np.eye(3, dtype=int)
+
+    # --- Pass 1: remove xy-components from c ---
     cell = np.array(atoms.cell)
-    a_vec = cell[0]
-    b_vec = cell[1]
-    c_vec = cell[2]
+    a_vec, b_vec, c_vec = cell[0], cell[1], cell[2]
 
-    # Solve for coefficients: c_vec = n1*a_vec + n2*b_vec + c_perp
-    # in the xy part only (we want c_perp to have no xy components)
-    # Project c onto the ab plane using the 2D inverse
-    ab_2d = np.array([a_vec[:2], b_vec[:2]])  # (2, 2)
-    c_2d = c_vec[:2]
+    ab_2d = np.array([a_vec[:2], b_vec[:2]])
+    if abs(np.linalg.det(ab_2d)) > 1e-10:
+        coeffs = np.linalg.solve(ab_2d.T, c_vec[:2])
+        n1, n2 = round(coeffs[0]), round(coeffs[1])
+        if n1 != 0 or n2 != 0:
+            P1 = np.array([[1,0,0],[0,1,0],[-n1,-n2,1]])
+            P_total = P1 @ P_total
 
-    if abs(np.linalg.det(ab_2d)) < 1e-10:
-        # a and b are parallel in xy — nothing to fix
-        return atoms.copy()
+    # --- Pass 2: remove z-components from a and b ---
+    # After pass 1, recompute the cell
+    new_cell = P_total.astype(float) @ np.array(atoms.cell)
+    c_z = new_cell[2, 2]
+    if abs(c_z) > 1e-10:
+        # a' = a - round(a_z/c_z) * c
+        m1 = round(new_cell[0, 2] / c_z)
+        m2 = round(new_cell[1, 2] / c_z)
+        if m1 != 0 or m2 != 0:
+            P2 = np.array([[1,0,-m1],[0,1,-m2],[0,0,1]])
+            P_total = P2 @ P_total
 
-    coeffs = np.linalg.solve(ab_2d.T, c_2d)  # [n1, n2]
-    n1 = round(coeffs[0])
-    n2 = round(coeffs[1])
+    if not np.array_equal(P_total, np.eye(3, dtype=int)):
+        out = make_supercell(atoms, P_total)
+        for key in atoms.info:
+            if key not in out.info:
+                out.info[key] = atoms.info[key]
+    else:
+        out = atoms.copy()
 
-    # Integer shear matrix: c' = c - n1*a - n2*b
-    P = np.array([
-        [1, 0, 0],
-        [0, 1, 0],
-        [-n1, -n2, 1],
-    ])
+    # --- Pass 3: rigid rotation to eliminate remaining z-tilt ---
+    # If in-plane vectors still have z-components (non-integer skew),
+    # rotate the entire structure so that cell[2] points along z
+    # and the in-plane vectors lie in the xy-plane.
+    cell = np.array(out.cell)
+    c_hat = cell[2] / np.linalg.norm(cell[2])
+    z_hat = np.array([0.0, 0.0, 1.0])
 
-    out = make_supercell(atoms, P)
+    if not np.allclose(c_hat, z_hat, atol=1e-4):
+        # Rotation mapping c_hat → z_hat
+        v = np.cross(c_hat, z_hat)
+        s = np.linalg.norm(v)
+        cc = np.dot(c_hat, z_hat)
+        if s > 1e-10:
+            vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+            Q = np.eye(3) + vx + vx @ vx * (1 - cc) / (s * s)
+        elif cc < 0:
+            Q = np.diag([1.0, -1.0, -1.0])
+        else:
+            Q = np.eye(3)
 
-    out.info["skew_correction"] = P.tolist()
-    # Preserve original info
-    for key in atoms.info:
-        if key not in out.info:
-            out.info[key] = atoms.info[key]
+        new_cell = cell @ Q.T
+        out.set_cell(new_cell, scale_atoms=False)
+        out.positions = out.positions @ Q.T
 
+    # Now zero out any tiny z-components in cell[0] and cell[1]
+    cell = np.array(out.cell)
+    cell[0, 2] = 0.0
+    cell[1, 2] = 0.0
+    out.set_cell(cell, scale_atoms=False)
+
+    out.info["skew_correction"] = P_total.tolist()
     return out
 
 
