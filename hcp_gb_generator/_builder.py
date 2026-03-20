@@ -740,19 +740,13 @@ def build_tilt_gb(
         csl_record, ca, gb_plane_3ax
     )
 
-    R_cart = np.asarray(csl_record["R_cart"])
-
-    # Build LOWER grain with the simpler (lower-index) directions.
-    # Pick whichever set has smaller max index to avoid huge supercells.
+    # Build the LOWER grain with whichever direction set has smaller
+    # indices (to keep the supercell compact).
     def _max_idx(dirs):
         return max(abs(x) for d in dirs for x in d)
 
-    if _max_idx(lower_dirs) <= _max_idx(upper_dirs):
-        ref_dirs = lower_dirs
-        R_other = R_cart           # rotate lower→upper
-    else:
-        ref_dirs = upper_dirs
-        R_other = R_cart.T         # rotate upper→lower (inverse)
+    ref_dirs = (lower_dirs if _max_idx(lower_dirs) <= _max_idx(upper_dirs)
+                else upper_dirs)
 
     size = (1, 1, n_layers)
     try:
@@ -778,18 +772,16 @@ def build_tilt_gb(
         ref_slab.set_scaled_positions(frac)
         ref_slab.positions[:, 2] -= ref_slab.positions[:, 2].min()
 
-    # Second grain: rotate atom positions by R_cart (same cell)
-    other_slab = ref_slab.copy()
-    center = other_slab.cell.sum(axis=0) / 2
-    other_slab.positions = (
-        (other_slab.positions - center) @ R_other.T + center
-    )
-
-    # Assign lower / upper based on which set was reference
-    if _max_idx(lower_dirs) <= _max_idx(upper_dirs):
-        lower, upper = ref_slab, other_slab
-    else:
-        lower, upper = other_slab, ref_slab
+    # Second grain: MIRROR the reference slab across the GB plane.
+    # For a symmetric tilt GB the two grains are mirror images.
+    # The GB plane is the top face of the lower slab (z = z_max).
+    # Mirroring z: z_new = z_max - (z - z_min), which reverses the
+    # layer stacking order and gives the mirror-image orientation.
+    lower = ref_slab
+    upper = ref_slab.copy()
+    z_min = upper.positions[:, 2].min()
+    z_max = upper.positions[:, 2].max()
+    upper.positions[:, 2] = (z_max + z_min) - upper.positions[:, 2]
 
     lower.info["n_layers"] = n_layers
 
