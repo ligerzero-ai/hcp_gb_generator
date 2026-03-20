@@ -693,6 +693,11 @@ def build_tilt_gb(
     the two grains share a coincident atomic layer.  By default this
     duplicate layer is merged (``merge_boundary_layer=True``).
 
+    Construction: one grain is built as an oriented slab, and the
+    second grain is created by rotating a copy using the full CSL
+    rotation matrix.  This guarantees both grains have the same cell
+    dimensions.
+
     Parameters
     ----------
     csl_record : dict
@@ -735,41 +740,56 @@ def build_tilt_gb(
         csl_record, ca, gb_plane_3ax
     )
 
+    R_cart = np.asarray(csl_record["R_cart"])
+
+    # Build LOWER grain with the simpler (lower-index) directions.
+    # Pick whichever set has smaller max index to avoid huge supercells.
+    def _max_idx(dirs):
+        return max(abs(x) for d in dirs for x in d)
+
+    if _max_idx(lower_dirs) <= _max_idx(upper_dirs):
+        ref_dirs = lower_dirs
+        R_other = R_cart           # rotate lower→upper
+    else:
+        ref_dirs = upper_dirs
+        R_other = R_cart.T         # rotate upper→lower (inverse)
+
     size = (1, 1, n_layers)
     try:
-        upper = HexagonalClosedPacked(
+        ref_slab = HexagonalClosedPacked(
             symbol=element,
             latticeconstant=(a, c),
-            directions=upper_dirs,
-            size=size,
-        )
-        lower = HexagonalClosedPacked(
-            symbol=element,
-            latticeconstant=(a, c),
-            directions=lower_dirs,
+            directions=ref_dirs,
             size=size,
         )
     except Exception as exc:
         raise RuntimeError(
-            f"ASE could not build slab with directions "
-            f"upper={upper_dirs}, lower={lower_dirs}. "
+            f"ASE could not build slab with directions {ref_dirs}. "
             f"This may happen for high-index orientations. "
             f"Try specifying gb_plane_3ax explicitly.\n"
             f"Original error: {exc}"
         ) from exc
 
-    # Ensure both slabs have positive z cell vector.
-    # With half-rotation directions, the stacking direction should generally
-    # be positive, but if not, flip the cell and remap atoms via fractional
-    # coordinates to preserve the crystal orientation.
-    for slab in (lower, upper):
-        if slab.cell[2, 2] < 0:
-            frac = slab.get_scaled_positions(wrap=False)
-            slab.cell[2] = -slab.cell[2]
-            frac[:, 2] = -frac[:, 2]
-            slab.set_scaled_positions(frac)
-            # Shift so all Cartesian z >= 0
-            slab.positions[:, 2] -= slab.positions[:, 2].min()
+    # Ensure positive z cell vector
+    if ref_slab.cell[2, 2] < 0:
+        frac = ref_slab.get_scaled_positions(wrap=False)
+        ref_slab.cell[2] = -ref_slab.cell[2]
+        frac[:, 2] = -frac[:, 2]
+        ref_slab.set_scaled_positions(frac)
+        ref_slab.positions[:, 2] -= ref_slab.positions[:, 2].min()
+
+    # Second grain: rotate atom positions by R_cart (same cell)
+    other_slab = ref_slab.copy()
+    center = other_slab.cell.sum(axis=0) / 2
+    other_slab.positions = (
+        (other_slab.positions - center) @ R_other.T + center
+    )
+
+    # Assign lower / upper based on which set was reference
+    if _max_idx(lower_dirs) <= _max_idx(upper_dirs):
+        lower, upper = ref_slab, other_slab
+    else:
+        lower, upper = other_slab, ref_slab
 
     lower.info["n_layers"] = n_layers
 
