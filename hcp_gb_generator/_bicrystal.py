@@ -341,35 +341,57 @@ def build_bicrystal(
     # Target cell from the minimal CSL (one layer thick)
     target_cell = _csl_slab_cell(csl_record, prim, n_layers=1)
 
-    # Fill target cell with each grain's lattice
-    grain1 = _fill_cell(element, a, c, R1, target_cell)
-    grain2 = _fill_cell(element, a, c, R2, target_cell)
+    # Rotate the cell so the stacking vector (row 2) aligns with z.
+    # This ensures grain stacking works along the Cartesian z-axis.
+    stacking_vec = target_cell[2]
+    stacking_len = np.linalg.norm(stacking_vec)
+    stacking_hat = stacking_vec / stacking_len
 
-    # Replicate along stacking (axis 2) for thickness
+    # Rotation that maps stacking_hat → [0, 0, 1]
+    z_hat = np.array([0.0, 0.0, 1.0])
+    if np.allclose(stacking_hat, z_hat, atol=1e-6):
+        Q = np.eye(3)
+    elif np.allclose(stacking_hat, -z_hat, atol=1e-6):
+        Q = np.diag([1.0, -1.0, -1.0])  # 180 deg about x
+    else:
+        v = np.cross(stacking_hat, z_hat)
+        s = np.linalg.norm(v)
+        cc = np.dot(stacking_hat, z_hat)
+        vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+        Q = np.eye(3) + vx + vx @ vx * (1 - cc) / (s * s)
+
+    # Apply Q to the target cell
+    target_cell_aligned = target_cell @ Q.T
+
+    # Fill with each grain's lattice (grain rotations composed with Q)
+    grain1 = _fill_cell(element, a, c, Q @ R1, target_cell_aligned)
+    grain2 = _fill_cell(element, a, c, Q @ R2, target_cell_aligned)
+
+    # Replicate along stacking (axis 2, now aligned with z) for thickness
     grain1 *= (1, 1, n_layers)
     grain2 *= (1, 1, n_layers)
 
-    # Ensure positive z
+    # Ensure both have positive z cell component and positions start at z=0
     for slab in (grain1, grain2):
         if slab.cell[2, 2] < 0:
             frac = slab.get_scaled_positions(wrap=False)
             slab.cell[2] = -slab.cell[2]
             frac[:, 2] = -frac[:, 2]
             slab.set_scaled_positions(frac)
-            slab.positions[:, 2] -= slab.positions[:, 2].min()
+        slab.positions[:, 2] -= slab.positions[:, 2].min()
 
     # Tag grains
     grain1.arrays["grain_id"] = np.ones(len(grain1), dtype=int)
     grain2.arrays["grain_id"] = np.full(len(grain2), 2, dtype=int)
 
-    # Stack grain2 above grain1
-    offset = grain1.cell[2, 2] + interface_distance
-    grain2.positions[:, 2] += offset
+    # Stack grain2 above grain1 along z
+    slab_height = grain1.cell[2, 2]
+    grain2.positions[:, 2] += slab_height + interface_distance
 
     bicrystal = grain1.copy()
     bicrystal.extend(grain2)
 
-    total_height = offset + grain2.cell[2, 2]
+    total_height = 2 * slab_height + interface_distance
     if vacuum > 0:
         bicrystal.cell[2, 2] = total_height + vacuum
         bicrystal.pbc = [True, True, False]
