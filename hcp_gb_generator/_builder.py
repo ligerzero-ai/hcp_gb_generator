@@ -477,6 +477,15 @@ def build_tilt_gb(
             f"Original error: {exc}"
         ) from exc
 
+    # The mirrored lower grain can end up with a negative z cell vector
+    # (from the mirrored GB normal direction).  Fix by flipping z.
+    for slab in (lower, upper):
+        if slab.cell[2, 2] < 0:
+            slab.cell[2] = -slab.cell[2]
+            slab.positions[:, 2] = -slab.positions[:, 2]
+            # Shift so all z >= 0
+            slab.positions[:, 2] -= slab.positions[:, 2].min()
+
     lower.info["n_layers"] = n_layers
 
     return _stack_grains(
