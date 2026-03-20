@@ -110,20 +110,122 @@ def csl_supercell_matrix(csl_record: dict) -> np.ndarray:
 # Twist GB construction
 # ---------------------------------------------------------------------------
 
+def _remove_duplicate_layer(lower: Atoms, upper: Atoms,
+                            tol: float = 0.1) -> Atoms:
+    """
+    Remove atoms in ``upper`` that coincide with atoms in ``lower``
+    at the interface (within ``tol`` Å).
+
+    Returns a pruned copy of ``upper``.
+    """
+    # Interface: top of lower, bottom of upper
+    z_lo_max = lower.positions[:, 2].max()
+    z_up_min = upper.positions[:, 2].min()
+
+    # Candidate atoms near the boundary in upper grain
+    upper_out = upper.copy()
+    keep = np.ones(len(upper_out), dtype=bool)
+
+    for i, pos_up in enumerate(upper_out.positions):
+        if abs(pos_up[2] - z_up_min) > tol:
+            continue
+        # Check against all atoms near the top of the lower grain
+        for pos_lo in lower.positions:
+            if abs(pos_lo[2] - z_lo_max) > tol:
+                continue
+            dist = np.linalg.norm(pos_up - pos_lo)
+            if dist < tol:
+                keep[i] = False
+                break
+
+    if not keep.all():
+        upper_out = upper_out[keep]
+
+    return upper_out
+
+
+def _stack_grains(lower: Atoms, upper: Atoms, *,
+                  interface_distance: float,
+                  vacuum: float,
+                  merge_boundary_layer: bool,
+                  merge_tol: float,
+                  csl_record: dict,
+                  extra_info: dict | None = None) -> Atoms:
+    """
+    Stack two grain slabs into a bicrystal.
+
+    Parameters
+    ----------
+    lower, upper : Atoms
+        The two grain slabs (z is the stacking direction).
+    interface_distance : float
+        Spacing between grain surfaces at the GB plane (Å).
+    vacuum : float
+        Vacuum above the bicrystal (Å).  0 → fully periodic (2 GBs per cell).
+        >0 → single GB with free surfaces.
+    merge_boundary_layer : bool
+        If True, remove duplicate atoms where the grains share a
+        coincident plane (relevant for symmetric tilt GBs).
+    merge_tol : float
+        Distance tolerance for identifying coincident atoms (Å).
+    csl_record : dict
+        CSL record for metadata.
+    extra_info : dict, optional
+        Additional keys to store in ``atoms.info``.
+    """
+    if merge_boundary_layer:
+        upper = _remove_duplicate_layer(lower, upper, tol=merge_tol)
+
+    # Shift upper grain above lower
+    offset = lower.cell[2, 2] + interface_distance
+    upper_shifted = upper.copy()
+    upper_shifted.positions[:, 2] += offset
+
+    # Combine
+    bicrystal = lower.copy()
+    bicrystal.arrays["grain_id"] = np.ones(len(lower), dtype=int)
+
+    upper_tagged = upper_shifted.copy()
+    upper_tagged.arrays["grain_id"] = np.full(len(upper_shifted), 2, dtype=int)
+
+    bicrystal.extend(upper_tagged)
+
+    # Cell height
+    total_height = offset + upper.cell[2, 2]
+    if vacuum > 0.0:
+        bicrystal.cell[2, 2] = total_height + vacuum
+        bicrystal.pbc = [True, True, False]
+    else:
+        bicrystal.cell[2, 2] = total_height
+        bicrystal.pbc = [True, True, True]
+
+    # Metadata
+    bicrystal.info["sigma"] = csl_record["sigma"]
+    bicrystal.info["disorientation_angle"] = csl_record["disorientation_angle"]
+    bicrystal.info["axis_miller"] = csl_record["axis_miller"]
+    bicrystal.info["interface_distance"] = interface_distance
+    bicrystal.info["vacuum"] = vacuum
+    bicrystal.info["n_layers"] = lower.info.get("n_layers", None)
+    if extra_info:
+        bicrystal.info.update(extra_info)
+
+    return bicrystal
+
+
 def build_twist_gb(
     csl_record: dict,
     element: str = "Ti",
     a: float = 2.95,
     c: float | None = None,
     n_layers: int = 6,
+    interface_distance: float = 0.5,
     vacuum: float = 0.0,
-    gap: float = 0.5,
 ) -> Atoms:
     """
     Build a twist grain boundary from a [0001]-axis CSL record.
 
     The two grains share the same (0001) surface; the upper grain is
-    rotated in-plane by the CSL angle θ.  The simulation cell uses the
+    rotated in-plane by the CSL angle.  The simulation cell uses the
     CSL supercell vectors so both grains are commensurate.
 
     Parameters
@@ -133,14 +235,18 @@ def build_twist_gb(
     element : str
         Chemical symbol.
     a, c : float
-        Lattice parameters (Å).  If c is None, uses ``a * ca_ratio``
-        where ca_ratio is inferred from the CSL record's basis matrix.
+        Lattice parameters (Å).  If c is None, uses ``a * sqrt(8/3)``.
     n_layers : int
         Number of (0001) bilayers per grain.
+    interface_distance : float
+        Spacing between grain surfaces at the GB plane (Å).
+        For twist GBs the two surfaces face each other without a shared
+        plane, so a small positive value (~0.5 Å) is a reasonable
+        starting point before relaxation.
     vacuum : float
-        Vacuum above and below the bicrystal (Å).
-    gap : float
-        Separation between the two grains at the interface (Å).
+        Vacuum above the bicrystal (Å).
+        0 → fully periodic, 2 GBs per cell.
+        >0 → single GB with free surfaces at the top and bottom.
 
     Returns
     -------
@@ -151,18 +257,10 @@ def build_twist_gb(
         c = a * sqrt(8.0 / 3.0)
 
     M = np.asarray(csl_record["M_crystal"])
-    sigma = csl_record["sigma"]
     R_cart = np.asarray(csl_record["R_cart"])
 
-    # Build primitive HCP unit cell
     prim = bulk(element, "hcp", a=a, c=c)
 
-    # CSL supercell matrix (crystal coords → crystal coords)
-    # For [0001] twist: M = [[u,-v,0],[v,u-v,0],[0,0,sigma]]
-    # The CSL supercell in Cartesian = prim.cell.T @ P.T
-    # where P is the transformation matrix in crystal coords.
-    # We use P = [[u, v, 0], [-v, u-v, 0], [0, 0, 1]] to get
-    # a supercell whose in-plane area = sigma × primitive area.
     u, v = int(M[0, 0]), int(M[1, 0])
     P = np.array([
         [u, v, 0],
@@ -170,42 +268,24 @@ def build_twist_gb(
         [0, 0, 1],
     ])
 
-    # Build lower grain (standard orientation, CSL supercell)
     lower = make_supercell(prim, P)
-
-    # Replicate along c for desired thickness
     lower *= (1, 1, n_layers)
+    lower.info["n_layers"] = n_layers
 
-    # Build upper grain: same supercell, but atoms rotated by R_cart
     upper = lower.copy()
-    # Rotate atom positions around the center of the cell
     center = upper.cell.sum(axis=0) / 2
     upper.positions = (
         (upper.positions - center) @ R_cart.T + center
     )
 
-    # Stack: shift upper grain above lower
-    offset = lower.cell[2, 2] + gap
-    upper.positions[:, 2] += offset
-
-    # Combine
-    bicrystal = lower.copy()
-    bicrystal.arrays["grain_id"] = np.ones(len(lower), dtype=int)
-
-    upper_tagged = upper.copy()
-    upper_tagged.arrays["grain_id"] = np.full(len(upper), 2, dtype=int)
-
-    bicrystal.extend(upper_tagged)
-    bicrystal.cell[2, 2] = offset + upper.cell[2, 2] + vacuum
-    bicrystal.pbc = [True, True, vacuum == 0.0]
-
-    bicrystal.info["sigma"] = sigma
-    bicrystal.info["disorientation_angle"] = csl_record["disorientation_angle"]
-    bicrystal.info["axis_miller"] = csl_record["axis_miller"]
-    bicrystal.info["gap"] = gap
-    bicrystal.info["n_layers"] = n_layers
-
-    return bicrystal
+    return _stack_grains(
+        lower, upper,
+        interface_distance=interface_distance,
+        vacuum=vacuum,
+        merge_boundary_layer=False,
+        merge_tol=0.1,
+        csl_record=csl_record,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -320,14 +400,17 @@ def build_tilt_gb(
     c: float | None = None,
     gb_plane_3ax: list[int] | None = None,
     n_layers: int = 6,
+    interface_distance: float = 0.0,
     vacuum: float = 0.0,
-    gap: float = 0.5,
+    merge_boundary_layer: bool = True,
+    merge_tol: float = 0.1,
 ) -> Atoms:
     """
     Build a symmetric tilt grain boundary from a CSL record.
 
-    Uses ASE's ``HexagonalClosedPacked`` factory to create oriented
-    slabs, then stacks them.
+    For a symmetric tilt GB the boundary plane is a mirror plane and
+    the two grains share a coincident atomic layer.  By default this
+    duplicate layer is merged (``merge_boundary_layer=True``).
 
     Parameters
     ----------
@@ -339,8 +422,22 @@ def build_tilt_gb(
         GB plane normal in 3-axis hex notation.  Auto-computed if None.
     n_layers : int
         Slab thickness in unit cell layers along the stacking direction.
-    vacuum, gap : float
-        Vacuum padding and gap between grains (Å).
+    interface_distance : float
+        Spacing between grain surfaces at the GB plane (Å).
+        For symmetric tilt GBs the grains share a common plane, so the
+        default is 0.0 (direct contact).
+    vacuum : float
+        Vacuum above the bicrystal (Å).
+        0 → fully periodic, 2 GBs per cell (one at the interface,
+            one at the periodic boundary).
+        >0 → single GB with free surfaces at the top and bottom.
+    merge_boundary_layer : bool
+        If True (default), remove the duplicate atomic plane where the
+        two grains meet.  This is the physically correct treatment for
+        symmetric tilt GBs.
+    merge_tol : float
+        Distance tolerance (Å) for identifying coincident atoms at the
+        boundary.
 
     Returns
     -------
@@ -357,7 +454,6 @@ def build_tilt_gb(
         csl_record, ca, gb_plane_3ax
     )
 
-    # Build slabs
     size = (1, 1, n_layers)
     try:
         upper = HexagonalClosedPacked(
@@ -381,28 +477,150 @@ def build_tilt_gb(
             f"Original error: {exc}"
         ) from exc
 
-    # Stack along z (index 2)
-    offset = lower.cell[2, 2] + gap
-    upper.positions[:, 2] += offset
+    lower.info["n_layers"] = n_layers
 
-    bicrystal = lower.copy()
-    bicrystal.arrays["grain_id"] = np.ones(len(lower), dtype=int)
+    return _stack_grains(
+        lower, upper,
+        interface_distance=interface_distance,
+        vacuum=vacuum,
+        merge_boundary_layer=merge_boundary_layer,
+        merge_tol=merge_tol,
+        csl_record=csl_record,
+        extra_info={"upper_dirs": upper_dirs, "lower_dirs": lower_dirs},
+    )
 
-    upper_copy = upper.copy()
-    upper_copy.arrays["grain_id"] = np.full(len(upper), 2, dtype=int)
 
-    bicrystal.extend(upper_copy)
-    bicrystal.cell[2, 2] = offset + upper.cell[2, 2] + vacuum
-    bicrystal.pbc = [True, True, vacuum == 0.0]
+# ---------------------------------------------------------------------------
+# Rescale: enumerate at rational c/a, build at real lattice
+# ---------------------------------------------------------------------------
 
-    bicrystal.info["sigma"] = csl_record["sigma"]
-    bicrystal.info["disorientation_angle"] = csl_record["disorientation_angle"]
-    bicrystal.info["axis_miller"] = csl_record["axis_miller"]
-    bicrystal.info["upper_dirs"] = upper_dirs
-    bicrystal.info["lower_dirs"] = lower_dirs
-    bicrystal.info["gap"] = gap
+def rescale_to_lattice(
+    atoms: Atoms,
+    a_real: float,
+    c_real: float,
+    a_csl: float | None = None,
+    c_csl: float | None = None,
+) -> Atoms:
+    """
+    Rescale a bicrystal built at rational c/a to the real lattice parameters.
 
-    return bicrystal
+    Exact tilt CSLs require rational (c/a)^2.  The standard workflow is:
+
+    1. **Enumerate** at a nearby rational c/a  (e.g. sqrt(5/2) for Ti)
+    2. **Build** the bicrystal at that rational c/a
+    3. **Rescale** to the real lattice with this function
+
+    The rescaling applies a uniform affine strain that maps the CSL
+    lattice to the real lattice.  The ~0.3% misfit is physically
+    accommodated by DSC dislocations at the boundary.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        Bicrystal built at rational c/a (from ``build_gb`` etc.).
+    a_real, c_real : float
+        Target (real) lattice parameters in Angstrom.
+    a_csl, c_csl : float, optional
+        The lattice parameters used during construction.
+        If None, inferred from the cell (assumes the cell was built
+        with ``a=a_csl`` and ``c=c_csl``).
+
+    Returns
+    -------
+    ase.Atoms
+        A copy with cell and positions rescaled.
+
+    Examples
+    --------
+    >>> # Ti: enumerate at c/a = sqrt(5/2), build, then rescale
+    >>> from math import sqrt
+    >>> ca_csl = sqrt(5/2)
+    >>> a_csl, c_csl = 2.95, 2.95 * ca_csl
+    >>> gb = build_gb(rec, element="Ti", a=a_csl, c=c_csl)
+    >>> gb_real = rescale_to_lattice(gb, a_real=2.95, c_real=4.68,
+    ...                              a_csl=a_csl, c_csl=c_csl)
+    """
+    out = atoms.copy()
+
+    if a_csl is None or c_csl is None:
+        # Infer from cell: for HCP bicrystal, cell[0] length ~ n*a
+        # and cell[2] / n_layers ~ c
+        # Fallback: uniform scale using a only
+        cell_lengths = atoms.cell.lengths()
+        if a_csl is None:
+            a_csl = a_real   # assume already at real a
+        if c_csl is None:
+            c_csl = c_real   # assume already at real c
+
+    # Scale factors
+    s_a = a_real / a_csl
+    s_c = c_real / c_csl
+
+    # Build the deformation gradient in Cartesian
+    # HCP: x,y scale by s_a, z scales by s_c
+    F = np.diag([s_a, s_a, s_c])
+
+    out.set_cell(F @ atoms.cell[:], scale_atoms=False)
+    out.positions = atoms.positions @ F.T
+
+    # Store strain info
+    out.info["rescaled"] = True
+    out.info["strain_a"] = s_a - 1.0
+    out.info["strain_c"] = s_c - 1.0
+
+    return out
+
+
+def build_gb_rescaled(
+    csl_record: dict,
+    element: str,
+    a_real: float,
+    c_real: float,
+    ca_csl: float | None = None,
+    **build_kwargs,
+) -> Atoms:
+    """
+    Build a GB at rational c/a and rescale to real lattice parameters.
+
+    Convenience wrapper that combines ``build_gb`` + ``rescale_to_lattice``.
+
+    Parameters
+    ----------
+    csl_record : dict
+        CSL record (enumerated at rational c/a).
+    element : str
+        Chemical symbol.
+    a_real, c_real : float
+        Real lattice parameters (Angstrom).
+    ca_csl : float, optional
+        Rational c/a used for CSL enumeration.
+        If None, uses sqrt(8/3) (ideal HCP).
+    **build_kwargs
+        Passed to ``build_gb`` (n_layers, gap, vacuum, etc.).
+
+    Returns
+    -------
+    ase.Atoms
+        Bicrystal at real lattice parameters.
+
+    Examples
+    --------
+    >>> from math import sqrt
+    >>> from hcp_gb_generator import find_csl, build_gb_rescaled
+    >>> rec = find_csl(ca_ratio=sqrt(5/2), sigma=7,
+    ...               axis_miller_bravais=[1,0,-1,0], sigma_max=10)[0]
+    >>> gb = build_gb_rescaled(rec, "Ti", a_real=2.95, c_real=4.68,
+    ...                        ca_csl=sqrt(5/2), n_layers=4)
+    """
+    if ca_csl is None:
+        ca_csl = sqrt(8.0 / 3.0)
+
+    a_csl = a_real
+    c_csl = a_real * ca_csl
+
+    gb = build_gb(csl_record, element=element, a=a_csl, c=c_csl,
+                  **build_kwargs)
+    return rescale_to_lattice(gb, a_real, c_real, a_csl, c_csl)
 
 
 # ---------------------------------------------------------------------------
@@ -416,8 +634,8 @@ def build_gb(
     c: float | None = None,
     gb_plane_3ax: list[int] | None = None,
     n_layers: int = 6,
+    interface_distance: float | None = None,
     vacuum: float = 0.0,
-    gap: float = 0.5,
 ) -> Atoms:
     """
     Build a grain boundary bicrystal from a CSL record.
@@ -439,10 +657,14 @@ def build_gb(
         GB plane normal (3-axis notation).  Auto-detected if None.
     n_layers : int
         Layers per grain (thickness control).
+    interface_distance : float, optional
+        Spacing between grain surfaces at the GB plane (Å).
+        If None, defaults to 0.5 for twist (no shared plane) and
+        0.0 for tilt (shared coincident plane).
     vacuum : float
-        Vacuum padding (Å).  0 for fully periodic.
-    gap : float
-        Gap between grains at the interface (Å).
+        Vacuum above the bicrystal (Å).
+        0 → fully periodic, 2 GBs per cell.
+        >0 → single GB with free surfaces at top and bottom.
 
     Returns
     -------
@@ -451,12 +673,11 @@ def build_gb(
 
     Examples
     --------
-    >>> from hcp_gb_generator import find_csl
-    >>> from hcp_gb_generator.builder import build_gb
+    >>> from hcp_gb_generator import find_csl, build_gb
     >>> recs = find_csl(ca_ratio=1.587, sigma=7,
     ...                 axis_miller_bravais=[0,0,0,1], sigma_max=10)
     >>> atoms = build_gb(recs[0], element="Ti", a=2.95, c=4.68,
-    ...                  n_layers=4, gap=0.5)
+    ...                  n_layers=4)
     >>> atoms.info["sigma"]
     7
     """
@@ -466,13 +687,15 @@ def build_gb(
     is_twist = (axis[0] == 0 and axis[1] == 0 and axis[2] != 0)
 
     if is_twist:
+        dist = interface_distance if interface_distance is not None else 0.5
         return build_twist_gb(
             csl_record, element, a, c,
-            n_layers=n_layers, vacuum=vacuum, gap=gap,
+            n_layers=n_layers, interface_distance=dist, vacuum=vacuum,
         )
     else:
+        dist = interface_distance if interface_distance is not None else 0.0
         return build_tilt_gb(
             csl_record, element, a, c,
             gb_plane_3ax=gb_plane_3ax,
-            n_layers=n_layers, vacuum=vacuum, gap=gap,
+            n_layers=n_layers, interface_distance=dist, vacuum=vacuum,
         )

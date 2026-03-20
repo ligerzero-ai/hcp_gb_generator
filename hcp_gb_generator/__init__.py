@@ -23,10 +23,12 @@ from hcp_gb_generator._core import (
 )
 from hcp_gb_generator._builder import (
     build_gb,
+    build_gb_rescaled,
     build_tilt_gb,
     build_twist_gb,
     csl_slab_directions,
     csl_supercell_matrix,
+    rescale_to_lattice,
 )
 
 __all__ = [
@@ -44,8 +46,10 @@ __all__ = [
     "to_dataframe",
     # Builder
     "build_gb",
+    "build_gb_rescaled",
     "build_tilt_gb",
     "build_twist_gb",
     "csl_slab_directions",
     "csl_supercell_matrix",
+    "rescale_to_lattice",
 ]
