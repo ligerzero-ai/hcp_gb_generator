@@ -267,6 +267,14 @@ def _csl_slab_cell(
 # Main builder
 # ---------------------------------------------------------------------------
 
+def _hcp_nn_distance(a: float, c: float) -> float:
+    """Return the nearest-neighbour distance in an ideal HCP lattice."""
+    # In HCP the NN is min(a, sqrt(a²/3 + c²/4))
+    d_basal = a
+    d_inter = sqrt(a * a / 3.0 + c * c / 4.0)
+    return min(d_basal, d_inter)
+
+
 def build_bicrystal(
     csl_record: dict,
     element: str = "Ti",
@@ -276,6 +284,7 @@ def build_bicrystal(
     interface_distance: float = 0.0,
     vacuum: float = 0.0,
     overlap_tol: float = 0.0,
+    merge_closer_bond_ratio: float = 0.0,
     symmetric: bool = False,
 ) -> Atoms:
     """
@@ -307,7 +316,14 @@ def build_bicrystal(
         Vacuum above bicrystal (Å).  0 = periodic (2 GBs/cell).
     overlap_tol : float
         Remove atom pairs closer than this at the interface (Å).
-        0 = no removal.
+        0 = no removal.  Takes precedence over ``merge_closer_bond_ratio``
+        if both are nonzero.
+    merge_closer_bond_ratio : float
+        Remove interface atom pairs closer than
+        ``merge_closer_bond_ratio * bond_length``, where ``bond_length``
+        is the nearest-neighbour distance in the bulk HCP lattice.
+        Equivalent to pymatgen's ``rm_ratio``.
+        0 = no removal.  Typical value: 0.5–0.7.
     symmetric : bool
         Currently only False is supported (grain 1 at identity,
         grain 2 at full rotation θ).  Symmetric construction
@@ -398,8 +414,11 @@ def build_bicrystal(
         bicrystal.pbc = [True, True, True]
 
     # Remove overlapping atoms at interface
-    if overlap_tol > 0:
-        bicrystal = _remove_overlaps(bicrystal, overlap_tol)
+    effective_tol = overlap_tol
+    if effective_tol <= 0 and merge_closer_bond_ratio > 0:
+        effective_tol = merge_closer_bond_ratio * _hcp_nn_distance(a, c)
+    if effective_tol > 0:
+        bicrystal = _remove_overlaps(bicrystal, effective_tol)
 
     # Metadata
     bicrystal.info["sigma"] = csl_record["sigma"]
@@ -409,5 +428,8 @@ def build_bicrystal(
     bicrystal.info["vacuum"] = vacuum
     bicrystal.info["n_layers"] = n_layers
     bicrystal.info["symmetric"] = symmetric
+    bicrystal.info["merge_closer_bond_ratio"] = merge_closer_bond_ratio
+    bicrystal.info["nn_bond_length"] = _hcp_nn_distance(a, c)
+    bicrystal.info["effective_overlap_tol"] = effective_tol
 
     return bicrystal
